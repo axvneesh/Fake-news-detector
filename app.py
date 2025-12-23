@@ -156,21 +156,28 @@ if st.session_state.get("model") is not None:
             else:
                 st.warning("Please enter a URL first.")
 
-    # TAB 2: MANUAL TEXT PASTE
+# TAB 2: MANUAL TEXT PASTE
     with tab2:
         text_input = st.text_area("Paste Article Text:", height=250, placeholder="Copy and paste the article body here...")
-        if st.button("Check Text"):
-            if text_input.strip():
-                with st.spinner("Analyzing linguistic patterns..."):
-                    prediction = st.session_state["model"].predict(st.session_state["tfidf_v"].transform([text_input]))[0]
-                    
-                    if prediction == 'REAL':
-                        st.success("✅ **Result: This text follows credible news structures.**")
-                    else:
-                        st.error("🚨 **Result: This text contains markers of fake news.**")
-            else:
-                st.warning("Please paste some text to analyze.")
+        
+        # Check if model exists before allowing analysis
+        if st.session_state.get("model") is not None:
+            if st.button("Check Text"):
+                if text_input.strip():
+                    with st.spinner("Analyzing linguistic patterns..."):
+                        # Predict using the model stored in session state
+                        prediction = st.session_state["model"].predict(st.session_state["tfidf_v"].transform([text_input]))[0]
+                        
+                        if prediction == 'REAL':
+                            st.success("✅ **Result: This text follows credible news structures.**")
+                        else:
+                            st.error("🚨 **Result: This text contains markers of fake news.**")
+                else:
+                    st.warning("Please paste some text to analyze.")
+        else:
+            st.warning("⚠️ Model not trained. Please upload datasets above to enable text analysis.")
 
 # --- 4. FOOTER ---
 st.markdown("---")
+
 st.caption("Developed as a CS Engineering Prototype | Powered by NLP & Machine Learning")
