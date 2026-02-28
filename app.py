@@ -3,7 +3,6 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import PassiveAggressiveClassifier
 from pathlib import Path
-import time
 
 # Optional: `newspaper3k` is useful for URL scraping but may not be installed in all environments.
 try:
@@ -24,13 +23,11 @@ st.set_page_config(
 
 def _train_from_dfs(df_fake: pd.DataFrame, df_true: pd.DataFrame):
     """Train the TF-IDF vectorizer and classifier from two dataframes."""
-    # find suitable text column
     def find_text_column(df):
         candidates = ['text', 'article', 'content', 'body', 'article_body', 'headline', 'summary']
         for c in candidates:
             if c in df.columns:
                 return c
-        # fallback to first object dtype column
         for c in df.columns:
             if df[c].dtype == object:
                 return c
@@ -63,11 +60,13 @@ def _train_from_dfs(df_fake: pd.DataFrame, df_true: pd.DataFrame):
     x = tfidf_v.fit_transform(df['text'])
     y = df['label']
 
-    model = PassiveAggressiveClassifier(max_iter=50)
-    model.fit(x, y)
-    return tfidf_v, model
+    clf = PassiveAggressiveClassifier(max_iter=50)
+    clf.fit(x, y)
+    return tfidf_v, clf
 
 
+# FIX 1: Use @st.cache_resource so training only runs once, not on every rerender.
+@st.cache_resource
 def train_model():
     """Try to load CSVs from disk and train. Returns (tfidf_v, model) or (None, None)."""
     try:
@@ -78,25 +77,20 @@ def train_model():
             df_true = pd.read_csv(p_true)
             return _train_from_dfs(df_fake, df_true)
         else:
-            # Datasets not found on disk, tell the UI to ask for uploads
-            st.warning("Datasets (Fake.csv / True.csv) not found in project folder. You can upload them using the uploader below.")
             return None, None
     except Exception as e:
         st.error(f"Failed to train model from CSVs: {e}")
         return None, None
 
-# Initialize the engine
-tfidf_v, model = train_model()
-# persist in session_state so model survives reruns
-if 'tfidf_v' not in st.session_state:
+
+# FIX 2: Clean session_state initialization — just call once and store results.
+if 'tfidf_v' not in st.session_state or 'model' not in st.session_state:
+    tfidf_v, model = train_model()
     st.session_state['tfidf_v'] = tfidf_v
-if 'model' not in st.session_state:
     st.session_state['model'] = model
-# if model was loaded into local variables but session_state empty, set them
-if st.session_state['model'] is None and model is not None:
-    st.session_state['model'] = model
-if st.session_state['tfidf_v'] is None and tfidf_v is not None:
-    st.session_state['tfidf_v'] = tfidf_v
+    if model is None:
+        st.warning("Datasets (Fake.csv / True.csv) not found in project folder. You can upload them using the uploader below.")
+
 
 # --- 3. FRONTEND UI ---
 st.title("🕵️ VerifyNews AI Detector")
@@ -118,66 +112,66 @@ if st.session_state.get('model') is None:
                             st.session_state['tfidf_v'] = tfidf_v_new
                             st.session_state['model'] = model_new
                             st.success("✅ Model trained successfully.")
+                            st.rerun()
                 except Exception as e:
                     st.error(f"Failed to read/train from uploaded files: {e}")
             else:
                 st.warning("Please upload both Fake.csv and True.csv to train the model.")
 
 if st.session_state.get("model") is not None:
-    # Use tabs to separate URL scraping from Manual Paste
-    tab1, tab2 = st.tabs(["🌐 Analyze via Link", "📝 Analyze via Text"]) 
+    st.info("⚠️ Results are probabilistic and based on linguistic patterns — always verify news through trusted sources.", icon="ℹ️")
+
+    tab1, tab2 = st.tabs(["🌐 Analyze via Link", "📝 Analyze via Text"])
 
     # TAB 1: URL SCRAPING
     with tab1:
+        # FIX 3: Guard the button logic so it only runs if newspaper3k is available.
         if not HAS_NEWSPAPER:
             st.error("URL scraping requires the `newspaper3k` package. Install it with `pip install newspaper3k` to enable URL analysis.")
-        url_input = st.text_input("Paste News URL:", placeholder="https://example.com/news-article")
-        if st.button("Check Link"):
-            if url_input:
-                try:
-                    with st.spinner("🔍 AI is reading the website content..."):
-                        article = Article(url_input)
-                        article.download()
-                        article.parse()
-                        
-                        # Displaying extracted info
-                        st.info(f"**Found Article:** {article.title}")
-                        
-                        # Prediction
-                        prediction = st.session_state["model"].predict(st.session_state["tfidf_v"].transform([article.text]))[0]
-                        
-                        if prediction == 'REAL':
-                            st.success("✅ **Result: Likely Credible News**")
-                            st.balloons()
-                        else:
-                            st.error("🚨 **Result: Potential Misinformation/Fake**")
-                except Exception as e:
-                    st.warning(f"Could not scrape the URL. It might be blocked by the website. Error: {e}")
-            else:
-                st.warning("Please enter a URL first.")
+        else:
+            url_input = st.text_input("Paste News URL:", placeholder="https://example.com/news-article")
+            if st.button("Check Link"):
+                if url_input:
+                    try:
+                        with st.spinner("🔍 AI is reading the website content..."):
+                            article = Article(url_input)
+                            article.download()
+                            article.parse()
 
-# TAB 2: MANUAL TEXT PASTE
+                            st.info(f"**Found Article:** {article.title}")
+
+                            prediction = st.session_state["model"].predict(
+                                st.session_state["tfidf_v"].transform([article.text])
+                            )[0]
+
+                            if prediction == 'REAL':
+                                st.success("✅ **Result: Likely Credible News**")
+                                st.balloons()
+                            else:
+                                st.error("🚨 **Result: Potential Misinformation/Fake**")
+                    except Exception as e:
+                        st.warning(f"Could not scrape the URL. It might be blocked by the website. Error: {e}")
+                else:
+                    st.warning("Please enter a URL first.")
+
+    # TAB 2: MANUAL TEXT PASTE
+    # FIX 4: Removed redundant inner model check — already guaranteed by outer `if` block.
     with tab2:
         text_input = st.text_area("Paste Article Text:", height=250, placeholder="Copy and paste the article body here...")
-        
-        # Check if model exists before allowing analysis
-        if st.session_state.get("model") is not None:
-            if st.button("Check Text"):
-                if text_input.strip():
-                    with st.spinner("Analyzing linguistic patterns..."):
-                        # Predict using the model stored in session state
-                        prediction = st.session_state["model"].predict(st.session_state["tfidf_v"].transform([text_input]))[0]
-                        
-                        if prediction == 'REAL':
-                            st.success("✅ **Result: This text follows credible news structures.**")
-                        else:
-                            st.error("🚨 **Result: This text contains markers of fake news.**")
-                else:
-                    st.warning("Please paste some text to analyze.")
-        else:
-            st.warning("⚠️ Model not trained. Please upload datasets above to enable text analysis.")
+        if st.button("Check Text"):
+            if text_input.strip():
+                with st.spinner("Analyzing linguistic patterns..."):
+                    prediction = st.session_state["model"].predict(
+                        st.session_state["tfidf_v"].transform([text_input])
+                    )[0]
+
+                    if prediction == 'REAL':
+                        st.success("✅ **Result: This text follows credible news structures.**")
+                    else:
+                        st.error("🚨 **Result: This text contains markers of fake news.**")
+            else:
+                st.warning("Please paste some text to analyze.")
 
 # --- 4. FOOTER ---
 st.markdown("---")
-
 st.caption("Developed as a CS Engineering Prototype | Powered by NLP & Machine Learning")
